@@ -10,7 +10,7 @@ from .ipf import infer_peptidoforms
 from .levels_contexts import infer_peptides, infer_proteins, infer_genes, subsample_osw, reduce_osw, merge_osw, backpropagate_oswr
 from .export import export_tsv, export_score_plots
 from .export_compound import export_compound_tsv
-from .filter import filter_sqmass, filter_osw
+from .filter import filter_sqmass, filter_osw, filter_osw_by_precursorId
 from .data_handling import (transform_pi0_lambda, transform_threads, transform_subsample_ratio, check_sqlite_table)
 from functools import update_wrapper
 import sqlite3
@@ -391,7 +391,8 @@ def export_compound(infile, outfile, format, outcsv, max_rs_peakgroup_qvalue):
 @click.option('--max_protein_fdr', default=None, show_default=True, type=float, help='Maximum QVALUE to retain scored proteins in OSW.  [default: None]')
 @click.option('--max_peptide_fdr', default=None, show_default=True, type=float, help='Maximum QVALUE to retain scored peptides in OSW.  [default: None]')
 @click.option('--max_ms2_fdr', default=None, show_default=True, type=float, help='Maximum QVALUE to retain scored MS2 Features in OSW.  [default: None]')
-def filter(sqldbfiles, infile, max_precursor_pep, max_peakgroup_pep, max_transition_pep, remove_decoys, omit_tables, max_gene_fdr, max_protein_fdr, max_peptide_fdr, max_ms2_fdr):
+@click.option('--precursor_ids', default=None, show_default=True, type=click.Path(exists=True), help='.tsv file of precursor ids to select. If this is set ignores FDR cutoffs. [default: None]')
+def filter(sqldbfiles, infile, max_precursor_pep, max_peakgroup_pep, max_transition_pep, remove_decoys, omit_tables, max_gene_fdr, max_protein_fdr, max_peptide_fdr, max_ms2_fdr, precursor_ids):
     """
     Filter sqMass files or osw files
     """
@@ -401,7 +402,11 @@ def filter(sqldbfiles, infile, max_precursor_pep, max_peakgroup_pep, max_transit
             click.ClickException("If you are filtering sqMass files, you need to provide a PyProphet file via `--in` flag.")
         filter_sqmass(sqldbfiles, infile, max_precursor_pep, max_peakgroup_pep, max_transition_pep)
     elif all([pathlib.PurePosixPath(file).suffix.lower()=='.osw' for file in sqldbfiles]):
-        filter_osw(sqldbfiles, remove_decoys, omit_tables, max_gene_fdr, max_protein_fdr, max_peptide_fdr, max_ms2_fdr)
+        if precursor_ids is not None: # filter by precursor_ids
+            p_ids = pd.read_csv(precursor_ids, sep='\t', header=None)[0].values
+            filter_osw_by_precursorId(sqldbfiles, p_ids, omit_tables)
+        else: # filter by fdr cutoffs
+            filter_osw(sqldbfiles, remove_decoys, omit_tables, max_gene_fdr, max_protein_fdr, max_peptide_fdr, max_ms2_fdr)
     else:
         click.ClickException(f"There seems to be something wrong with the input sqlite db files. Make sure they are all either sqMass files or all OSW files, these are mutually exclusive.\nYour input files: {sqldbfiles}")
 

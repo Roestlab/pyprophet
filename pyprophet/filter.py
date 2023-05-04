@@ -36,7 +36,7 @@ def copy_table(c, conn, keep_ids, tbl, id_col, omit_tables=[]):
         conn.commit()
 
 def create_index_if(c, conn, stmt, tbl, omit_tables=[]):
-    if tbl not in omit_tables:
+    if tbl not in omit_tables and check_sqlite_table(conn, tbl):
         c.execute(stmt)
         conn.commit()
 
@@ -135,6 +135,106 @@ WHERE SCORE_MS2.PEP <= {0}
             raise click.ClickException("Conduct scoring on MS1, MS2 and/or transition-level before filtering.")
 
         filter_chrom_by_labels(sqm_in, sqm_out, transitions)
+
+def filter_osw_by_precursorId(oswfiles, precursor_ids, omit_tables):
+    ''' This function filters the oswfiles to the specified precursor_ids '''
+    # process each oswfile independently
+    for osw_in in oswfiles:
+        osw_out = osw_in.split(".osw")[0] + "_filtered.osw"
+
+        click.echo(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] INFO: Begin filtering {osw_in} to {osw_out}...")
+
+        conn = sqlite3.connect(osw_in)
+        c = conn.cursor()
+
+        c.execute("ATTACH DATABASE '%s' AS other;" % osw_out)
+
+        peptide_ids = np.unique(list(c.execute('SELECT PEPTIDE_ID FROM PRECURSOR_PEPTIDE_MAPPING WHERE PRECURSOR_ID IN ({})'.format(','.join([ str(i) for i in precursor_ids ])))))
+
+        # Table(s) - PROTEIN and SCORE_PROTEIN
+        if check_sqlite_table(conn, 'SCORE_PROTEIN'):
+            protein_ids = np.unique(list(c.execute("SELECT PROTEIN_ID FROM PEPTIDE_PROTEIN_MAPPING WHERE PEPTIDE_ID IN ({})".format(",".join( [ str(i) for i in peptide_ids ])))))
+            click.echo(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] INFO: Filtering for {len(protein_ids)} protein ids ")
+
+            # Copy filtered tables
+            copy_table(c, conn, protein_ids, "PROTEIN", "ID", omit_tables)
+            copy_table(c, conn, protein_ids, "SCORE_PROTEIN", "PROTEIN_ID", omit_tables)
+        else:
+            # Copy original full tables
+            protein_ids = np.unique(list(c.execute(f"SELECT ID FROM PROTEIN WHERE ID IS NOT NULL {decoy_query}")))            
+            copy_table(c, conn, protein_ids, "PROTEIN", "ID", omit_tables)
+            if check_sqlite_table(conn, 'SCORE_PROTEIN'):
+                copy_table(c, conn, protein_ids, "SCORE_PROTEIN", "PROTEIN_ID", omit_tables)
+
+        # Table(s) - PEPTIDE, SCORE_PEPTIDE and PEPTIDE_XXXX_MAPPING
+        if check_sqlite_table(conn, 'SCORE_PEPTIDE'):
+            click.echo(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] INFO: Filtering for {len(peptide_ids)} peptide ids")
+            # Copy filtered tables
+            copy_table(c, conn, peptide_ids, "PEPTIDE", "ID", omit_tables)
+            copy_table(c, conn, peptide_ids, "SCORE_PEPTIDE", "PEPTIDE_ID", omit_tables)
+            copy_table(c, conn, peptide_ids, "PRECURSOR_PEPTIDE_MAPPING", "PEPTIDE_ID", omit_tables)
+            copy_table(c, conn, peptide_ids, "PEPTIDE_PROTEIN_MAPPING", "PEPTIDE_ID", omit_tables)
+            copy_table(c, conn, peptide_ids, "PEPTIDE_GENE_MAPPING", "PEPTIDE_ID", omit_tables)
+       
+        # Table(s) - SCORE_MS2, FEATURE, FEATURE_MS1, FEATURE_MS2, FEATURE_TRANSITION, PRECURSOR
+        if check_sqlite_table(conn, 'SCORE_MS2'):
+            feature_ids = np.unique(list(c.execute('SELECT ID FROM FEATURE WHERE PRECURSOR_ID IN ({})'.format(','.join([ str(i) for i in precursor_ids ])))))
+            click.echo(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] INFO: Filtering for {len(feature_ids)} feature ids")
+            # Copy filtered tables
+            copy_table(c, conn, feature_ids, "FEATURE", "ID", omit_tables)
+            if check_sqlite_table(conn, 'FEATURE_MS1'):
+                copy_table(c, conn, feature_ids, "FEATURE_MS1", "FEATURE_ID", omit_tables)
+            copy_table(c, conn, feature_ids, "FEATURE_MS2", "FEATURE_ID", omit_tables)
+            if check_sqlite_table(conn, 'FEATURE_TRANSITION'):
+                copy_table(c, conn, feature_ids, "FEATURE_TRANSITION", "FEATURE_ID", omit_tables)
+            copy_table(c, conn, feature_ids, "SCORE_MS2", "FEATURE_ID", omit_tables)
+            copy_table(c, conn, precursor_ids, "PRECURSOR", "ID", omit_tables)
+       
+        # Table(s) - TRANSITION, TRANSITION_PRECURSOR_MAPPING, TRANSITION_PEPTIDE_MAPPING
+        transition_ids = np.unique(list(c.execute("SELECT TRANSITION_ID FROM TRANSITION_PRECURSOR_MAPPING WHERE PRECURSOR_ID IN ({})".format(','.join([ str(i) for i in precursor_ids ] )))))
+        click.echo(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] INFO: Filtering for  {len(transition_ids)} transition ids ...")
+
+        # Copy filtered tables
+        copy_table(c, conn, transition_ids, "TRANSITION", "ID", omit_tables)
+        copy_table(c, conn, transition_ids, "TRANSITION_PRECURSOR_MAPPING", "TRANSITION_ID", omit_tables)
+        copy_table(c, conn, transition_ids, "TRANSITION_PEPTIDE_MAPPING", "TRANSITION_ID", omit_tables)
+        if check_sqlite_table(conn, 'SCORE_TRANSITION'):
+            copy_table(c, conn, transition_ids, "SCORE_TRANSITION", "TRANSITION_ID", omit_tables)
+
+        # Table(s) - RUN, VERSION
+        c.execute('CREATE TABLE other.RUN as SELECT * FROM RUN')
+        c.execute('CREATE TABLE other.VERSION as SELECT * FROM VERSION')
+        conn.commit()
+
+        # Create Indexes
+        create_index_if(c, conn, "CREATE INDEX other.idx_feature_feature_id ON FEATURE (ID);", "FEATURE", omit_tables) 
+        create_index_if(c, conn, "CREATE INDEX other.idx_feature_ms1_feature_id ON FEATURE_MS1 (FEATURE_ID);", "FEATURE_MS1", omit_tables)  
+        create_index_if(c, conn, "CREATE INDEX other.idx_feature_ms2_feature_id ON FEATURE_MS2 (FEATURE_ID);", "FEATURE_MS2", omit_tables)  
+        create_index_if(c, conn, "CREATE INDEX other.idx_feature_precursor_id ON FEATURE (PRECURSOR_ID);", "FEATURE", omit_tables)  
+        create_index_if(c, conn, "CREATE INDEX other.idx_feature_run_id ON FEATURE (RUN_ID);", "FEATURE", omit_tables)  
+        create_index_if(c, conn, "CREATE INDEX other.idx_feature_transition_feature_id ON FEATURE_TRANSITION (FEATURE_ID);", "FEATURE_TRANSITION", omit_tables)  
+        create_index_if(c, conn, "CREATE INDEX other.idx_feature_transition_transition_id ON FEATURE_TRANSITION (TRANSITION_ID);", "FEATURE_TRANSITION", omit_tables)  
+        create_index_if(c, conn, "CREATE INDEX other.idx_peptide_peptide_id ON PEPTIDE (ID);", "PEPTIDE", omit_tables)  
+        create_index_if(c, conn, "CREATE INDEX other.idx_peptide_protein_mapping_peptide_id ON PEPTIDE_PROTEIN_MAPPING (PEPTIDE_ID);", "PEPTIDE_PROTEIN_MAPPING", omit_tables)  
+        create_index_if(c, conn, "CREATE INDEX other.idx_precursor_peptide_mapping_peptide_id ON PRECURSOR_PEPTIDE_MAPPING (PEPTIDE_ID);", "PRECURSOR_PEPTIDE_MAPPING", omit_tables)  
+        create_index_if(c, conn, "CREATE INDEX other.idx_precursor_peptide_mapping_precursor_id ON PRECURSOR_PEPTIDE_MAPPING (PRECURSOR_ID);", "PRECURSOR_PEPTIDE_MAPPING", omit_tables)  
+        create_index_if(c, conn, "CREATE INDEX other.idx_precursor_precursor_id ON PRECURSOR (ID);", "PRECURSOR", omit_tables)  
+        create_index_if(c, conn, "CREATE INDEX other.idx_protein_protein_id ON PROTEIN (ID);", "PROTEIN", omit_tables)  
+        create_index_if(c, conn, "CREATE INDEX other.idx_run_run_id ON RUN (ID)", "RUN", omit_tables)  
+        create_index_if(c, conn, "CREATE INDEX other.idx_score_ms2_feature_id ON SCORE_MS2 (FEATURE_ID);", "SCORE_MS2", omit_tables)  
+        create_index_if(c, conn, "CREATE INDEX other.idx_score_protein_protein_id ON SCORE_PROTEIN (PROTEIN_ID);", "SCORE_PROTEIN", omit_tables)  
+        create_index_if(c, conn, "CREATE INDEX other.idx_score_transition_feature_id ON SCORE_TRANSITION (FEATURE_ID);", "SCORE_TRANSITION", omit_tables)  
+        create_index_if(c, conn, "CREATE INDEX other.idx_score_transition_transition_id ON SCORE_TRANSITION (TRANSITION_ID);", "SCORE_TRANSITION", omit_tables)  
+        create_index_if(c, conn, "CREATE INDEX other.idx_transition_id ON TRANSITION (ID);", "TRANSITION", omit_tables)  
+        create_index_if(c, conn, "CREATE INDEX other.idx_transition_peptide_mapping_transition_id ON TRANSITION_PEPTIDE_MAPPING (TRANSITION_ID);", "TRANSITION_PEPTIDE_MAPPING", omit_tables)  
+
+        # Detach and close
+        c.execute("DETACH DATABASE 'other';")
+        conn.close()
+
+        click.echo(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] INFO: Finished filtering {osw_in} to {osw_out}...")
+
+
 
 def filter_osw(oswfiles, remove_decoys=True, omit_tables=[], max_gene_fdr=None, max_protein_fdr=None, max_peptide_fdr=None, max_ms2_fdr=None):
 
