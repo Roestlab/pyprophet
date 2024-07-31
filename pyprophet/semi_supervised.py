@@ -36,49 +36,55 @@ class AbstractSemiSupervisedLearner(object):
 
         click.echo("Info: Learning on cross-validation fold.")
 
-        experiment.split_for_xval(self.xeval_fraction, self.test)
-        train = experiment.get_train_peaks()
+        passed = False
+        while not passed:
+            try:
+                experiment.split_for_xval(self.xeval_fraction, self.test)
+                train = experiment.get_train_peaks()
 
-        train.rank_by("main_score")
+                train.rank_by("main_score")
 
-        params, clf_scores, use_as_main_score = self.start_semi_supervised_learning(train, score_columns, working_thread_number)
-        
-        # Get current main score column name
-        old_main_score_column = [col for col in score_columns if  'main' in col][0]
-        # Only Update if chosen main score column has changed
-        if use_as_main_score != old_main_score_column and self.ss_use_dynamic_main_score:
-            train, _ = update_chosen_main_score_in_table(train, score_columns, use_as_main_score)
-            train.rank_by("main_score")
-            experiment, score_columns = update_chosen_main_score_in_table(experiment, score_columns, use_as_main_score)
+                params, clf_scores, use_as_main_score = self.start_semi_supervised_learning(train, score_columns, working_thread_number)
+                
+                # Get current main score column name
+                old_main_score_column = [col for col in score_columns if  'main' in col][0]
+                # Only Update if chosen main score column has changed
+                if use_as_main_score != old_main_score_column and self.ss_use_dynamic_main_score:
+                    train, _ = update_chosen_main_score_in_table(train, score_columns, use_as_main_score)
+                    train.rank_by("main_score")
+                    experiment, score_columns = update_chosen_main_score_in_table(experiment, score_columns, use_as_main_score)
 
-        train.set_and_rerank("classifier_score", clf_scores)
+                train.set_and_rerank("classifier_score", clf_scores)
 
-        # semi supervised iteration:
-        for inner in range(self.xeval_num_iter):
-            # # tune first iteration of semi-supervised learning
-            # if inner == 0:
-            #     params, clf_scores = self.tune_semi_supervised_learning(train)
-            # else:
-            params, clf_scores = self.iter_semi_supervised_learning(train, score_columns, working_thread_number)
-            train.set_and_rerank("classifier_score", clf_scores)
+                # semi supervised iteration:
+                for inner in range(self.xeval_num_iter):
+                    # # tune first iteration of semi-supervised learning
+                    # if inner == 0:
+                    #     params, clf_scores = self.tune_semi_supervised_learning(train)
+                    # else:
+                    params, clf_scores = self.iter_semi_supervised_learning(train, score_columns, working_thread_number)
+                    train.set_and_rerank("classifier_score", clf_scores)
 
-        # after semi supervised iteration: classify full dataset
-        clf_scores = self.score(experiment, params)
-        mu, nu = mean_and_std_dev(clf_scores)
-        experiment.set_and_rerank("classifier_score", clf_scores)
+                # after semi supervised iteration: classify full dataset
+                clf_scores = self.score(experiment, params)
+                mu, nu = mean_and_std_dev(clf_scores)
+                experiment.set_and_rerank("classifier_score", clf_scores)
 
-        td_scores = experiment.get_top_decoy_peaks()["classifier_score"]
+                td_scores = experiment.get_top_decoy_peaks()["classifier_score"]
 
-        mu, nu = mean_and_std_dev(td_scores)
-        experiment["classifier_score"] = (experiment["classifier_score"] - mu) / nu
-        experiment.rank_by("classifier_score")
+                mu, nu = mean_and_std_dev(td_scores)
+                experiment["classifier_score"] = (experiment["classifier_score"] - mu) / nu
+                experiment.rank_by("classifier_score")
 
-        top_test_peaks = experiment.get_top_test_peaks()
+                top_test_peaks = experiment.get_top_test_peaks()
 
-        top_test_target_scores = top_test_peaks.get_target_peaks()["classifier_score"]
-        top_test_decoy_scores = top_test_peaks.get_decoy_peaks()["classifier_score"]
+                top_test_target_scores = top_test_peaks.get_target_peaks()["classifier_score"]
+                top_test_decoy_scores = top_test_peaks.get_decoy_peaks()["classifier_score"]
 
-        return top_test_target_scores, top_test_decoy_scores, params
+                passed = True
+                return top_test_target_scores, top_test_decoy_scores, params
+            except:
+                click.echo("Error: Semi-supervised learning failed. This is likely due to a pi0 estimation error. Will retry this crossfold")
 
     def learn_final(self, experiment):
         assert isinstance(experiment, Experiment)
