@@ -37,8 +37,10 @@ class AbstractSemiSupervisedLearner(object):
         click.echo("Info: Learning on cross-validation fold.")
 
         passed = False
+        experiment_base = Experiment(experiment.df)
         while not passed:
             try:
+                experiment = Experiment(experiment_base.df)
                 experiment.split_for_xval(self.xeval_fraction, self.test)
                 train = experiment.get_train_peaks()
 
@@ -62,6 +64,7 @@ class AbstractSemiSupervisedLearner(object):
                     # if inner == 0:
                     #     params, clf_scores = self.tune_semi_supervised_learning(train)
                     # else:
+                    click.echo(f'{working_thread_number}:{inner}')
                     params, clf_scores = self.iter_semi_supervised_learning(train, score_columns, working_thread_number)
                     train.set_and_rerank("classifier_score", clf_scores)
 
@@ -83,7 +86,8 @@ class AbstractSemiSupervisedLearner(object):
 
                 passed = True
                 return top_test_target_scores, top_test_decoy_scores, params
-            except:
+            except click.ClickException as e:
+                print(e)
                 click.echo("Error: Semi-supervised learning failed. This is likely due to a pi0 estimation error. Will retry this crossfold")
 
     def learn_final(self, experiment):
@@ -152,7 +156,7 @@ class StandardSemiSupervisedLearner(AbstractSemiSupervisedLearner):
         '''
         assert isinstance(train, Experiment)
         assert isinstance(col, str)
-        
+
         # Try catch exception when using a feature column that cannot generate a valid pi0 estimation due to imbalance of number of top decoys to best targets
         try:
             td_peaks, bt_peaks = self.select_train_peaks(train, col, self.ss_initial_fdr, self.parametric, self.pfdr, self.pi0_lambda, self.pi0_method, self.pi0_smooth_df, self.pi0_smooth_log_pi0, mapper, self.main_score_selection_report, self.outfile, self.level, working_thread_number)
