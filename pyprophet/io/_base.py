@@ -350,8 +350,8 @@ class BaseWriter(ABC):
             )
 
     def _prepare_score_dataframe(
-        self, df: pd.DataFrame, level: str, prefix: str
-    ) -> pd.DataFrame:
+        self, df: pl.DataFrame, level: str, prefix: str
+    ) -> pl.DataFrame:
         """
         Prepare the score DataFrame
         """
@@ -403,15 +403,17 @@ class BaseWriter(ABC):
             # arycal saves a label column to indicate 1 as target aligned peaks and -1 as the random/shuffled decoy aligned peak
             df["decoy"] = df["decoy"].map({0: 1, 1: -1})
 
-        df = df[score_cols].rename(columns=str.upper)
-        df = df.rename(columns={"D_SCORE": "SCORE"})
+        df = df.select(score_cols)
+        # Convert column names to uppercase
+        df = df.rename({col: col.upper() for col in df.columns})
+        df = df.rename({"D_SCORE": "SCORE"})
 
         if self.config.file_type == "osw":
             # Consistent renaming with original implementation for OSW files
-            df = df.rename(columns={"P_VALUE": "PVALUE", "Q_VALUE": "QVALUE"})
+            df = df.rename({"P_VALUE": "PVALUE", "Q_VALUE": "QVALUE"})
 
         if self.config.file_type == "osw" or self.level not in ("ms1ms2", "ms2"):
-            df = df.rename(columns={"PEAK_GROUP_RANK": "RANK"})
+            df = df.rename({"PEAK_GROUP_RANK": "RANK"})
 
         if level == "transition":
             if self.file_type in ("parquet", "parquet_split", "parquet_split_multi"):
@@ -435,7 +437,7 @@ class BaseWriter(ABC):
         rename_map = {
             col: f"{prefix}{col}" for col in df.columns if col not in key_cols
         }
-        return df.rename(columns=rename_map)
+        return df.rename(rename_map)
 
     def _write_pdf_report(self, result, pi0):
         """
@@ -513,14 +515,14 @@ class BaseWriter(ABC):
 
         if trained_weights_path is not None:
             if os.path.exists(trained_weights_path):
-                existing_df = pd.read_csv(trained_weights_path, sep=",")
-                existing_df = existing_df[existing_df["level"] != self.level]
-                updated_df = pd.concat([existing_df, weights], ignore_index=True)
+                existing_df = pl.read_csv(trained_weights_path)
+                existing_df = existing_df.filter(pl.col("level") != self.level)
+                updated_df = pl.concat([existing_df, weights])
             else:
                 updated_df = weights
 
             # Always overwrite with a single header
-            updated_df.to_csv(trained_weights_path, sep=",", index=False)
+            updated_df.write_csv(trained_weights_path)
             logger.success(f"{trained_weights_path} written.")
 
     def _save_bin_weights(self, weights):
@@ -576,7 +578,7 @@ class BaseWriter(ABC):
     # Shared Export Methods
     # ----------------------------
 
-    def export_results(self, data: pd.DataFrame):
+    def export_results(self, data: pl.DataFrame):
         """
         Save the results to the output file based on the export format.
 
@@ -588,26 +590,28 @@ class BaseWriter(ABC):
         sep = "," if cfg.out_type == "csv" else "\t"
 
         if cfg.export_format == "legacy_split":
-            data = data.drop(["id_run", "id_peptide"], axis=1)
+            data = data.drop(["id_run", "id_peptide"])
             # filename might contain archive extensions, so we need to remove these
-            data["filename"] = data["filename"].apply(
-                lambda x: os.path.splitext(os.path.basename(x))[0]
-            )
-            data.groupby("filename").apply(
-                lambda x: x.to_csv(
-                    os.path.basename(x["filename"].values[0]) + f".{cfg.out_type}",
-                    sep=sep,
-                    index=False,
+            data = data.with_columns(
+                pl.col("filename").map_elements(
+                    lambda x: os.path.splitext(os.path.basename(x))[0], return_dtype=pl.String
                 )
             )
+            # Group by filename and write separate CSV files
+            for group_name, group_df in data.group_by("filename", maintain_order=True):
+                filename = group_name[0] if isinstance(group_name, tuple) else group_name
+                group_df.write_csv(
+                    f"{filename}.{cfg.out_type}",
+                    separator=sep
+                )
         elif cfg.export_format == "legacy_merged":
-            data.drop(["id_run", "id_peptide"], axis=1).to_csv(
-                cfg.outfile, sep=sep, index=False
+            data.drop(["id_run", "id_peptide"]).write_csv(
+                cfg.outfile, separator=sep
             )
         else:
             raise ValueError(f"Unsupported export format: {cfg.export_format}")
 
-    def export_quant_matrix(self, data: pd.DataFrame) -> pd.DataFrame:
+    def export_quant_matrix(self, data: pl.DataFrame) -> pl.DataFrame:
         """
         Export quantification matrix at specified level with optional normalization.
 
@@ -645,88 +649,89 @@ class BaseWriter(ABC):
             matrix = self.normalization_methods[normalization](matrix)
             matrix = matrix.reset_index()
 
-        matrix.to_csv(self.config.outfile, sep=sep, index=False)
+        matrix.write_csv(self.config.outfile, separator=sep)
 
     def _summarize_precursor_level(
-        self, data: pd.DataFrame, _top_n: int, _consistent_top: bool
-    ) -> pd.DataFrame:
+        self, data: pl.DataFrame, _top_n: int, _consistent_top: bool
+    ) -> pl.DataFrame:
         """
         Create precursor-level matrix (no summarization needed).
         Just select top peak group per precursor.
         """
         # Select top ranking peak group only
-        data = data.iloc[
-            data.groupby(["run_id", "transition_group_id"]).apply(
-                lambda x: x["m_score"].idxmin()
-            )
-        ]
+        data = data.with_row_index("index").group_by(["run_id", "transition_group_id"]).agg(
+            pl.all().sort_by("m_score").first()
+        ).drop("index")
         logger.info("Summarizing to precursor level.")
         # Create matrix
-        matrix = data.pivot_table(
+        matrix = data.pivot(
             index=[
                 "transition_group_id",
-                "Sequence",
+                "Sequence", 
                 "FullPeptideName",
                 "Charge",
                 "ProteinName",
             ],
             columns="filename",
             values="Intensity",
-        ).reset_index()
+        )
         return matrix
 
     def _summarize_peptide_level(
-        self, data: pd.DataFrame, top_n: int, consistent_top: bool
-    ) -> pd.DataFrame:
+        self, data: pl.DataFrame, top_n: int, consistent_top: bool
+    ) -> pl.DataFrame:
         """
         Summarize to peptide level using top N precursors.
         """
         # First get top peak group per precursor
-        data = data.iloc[
-            data.groupby(["run_id", "transition_group_id"]).apply(
-                lambda x: x["m_score"].idxmin()
-            )
-        ]
+        data = data.group_by(["run_id", "transition_group_id"]).agg(
+            pl.all().sort_by("m_score").first()
+        )
         logger.info("Summarizing to peptide level.")
         # Get top precursors for each peptide
         if consistent_top:
             logger.info("Using consistent top precursors across all runs.")
             # Use precursors with highest median intensity across all runs
             median_intensity = (
-                data.groupby(["transition_group_id", "Sequence", "FullPeptideName"])[
-                    "Intensity"
-                ]
-                .median()
-                .reset_index()
+                data.group_by(["transition_group_id", "Sequence", "FullPeptideName"])
+                .agg(pl.col("Intensity").median().alias("median_intensity"))
             )
 
             top_precursors = (
-                median_intensity.groupby(["Sequence", "FullPeptideName"])
-                .apply(lambda x: x.nlargest(top_n, "Intensity")["transition_group_id"])
-                .reset_index()["transition_group_id"]
+                median_intensity.group_by(["Sequence", "FullPeptideName"])
+                .agg(
+                    pl.col("transition_group_id")
+                    .sort_by("median_intensity", descending=True)
+                    .head(top_n)
+                )
+                .select(pl.col("transition_group_id").explode())
+                .get_column("transition_group_id")
+                .to_list()
             )
 
-            data = data[data["transition_group_id"].isin(top_precursors)]
+            data = data.filter(pl.col("transition_group_id").is_in(top_precursors))
         else:
             logger.info("Using top precursors per run individually.")
             # Select top precursors per run individually
             data = (
-                data.groupby(["run_id", "Sequence", "FullPeptideName"])
-                .apply(lambda x: x.nlargest(top_n, "Intensity"))
-                .reset_index(drop=True)
+                data.group_by(["run_id", "Sequence", "FullPeptideName"])
+                .agg(
+                    pl.all().sort_by("Intensity", descending=True).head(top_n)
+                )
+                .explode(pl.all().exclude(["run_id", "Sequence", "FullPeptideName"]))
             )
 
         # Summarize by peptide (mean of top precursors)
         peptide_matrix = (
-            data.groupby(["Sequence", "FullPeptideName", "filename"])["Intensity"]
-            .mean()
-            .unstack()
-        ).reset_index()
+            data.group_by(["Sequence", "FullPeptideName", "filename"])
+            .agg(pl.col("Intensity").mean())
+            .pivot(index=["Sequence", "FullPeptideName"], columns="filename", values="Intensity")
+        )
         return peptide_matrix
 
     def _summarize_protein_level(
-        self, data: pd.DataFrame, top_n: int, consistent_top: bool
-    ) -> pd.DataFrame:
+        self, data: pl.DataFrame, top_n: int, consistent_top: bool
+    ) -> pl.DataFrame:
         """
         Summarize to protein level using top N peptides.
         """
@@ -778,8 +783,8 @@ class BaseWriter(ABC):
         return protein_matrix
 
     def _summarize_gene_level(
-        self, data: pd.DataFrame, top_n: int, consistent_top: bool
-    ) -> pd.DataFrame:
+        self, data: pl.DataFrame, top_n: int, consistent_top: bool
+    ) -> pl.DataFrame:
         """
         Summarize to gene level using top N peptides.
         """
@@ -828,27 +833,65 @@ class BaseWriter(ABC):
 
         return gene_matrix
 
-    def _median_normalize(self, matrix: pd.DataFrame) -> pd.DataFrame:
+    def _median_normalize(self, matrix: pl.DataFrame) -> pl.DataFrame:
         """Median normalization (per sample)"""
         logger.info("Applying median normalization.")
-        return matrix.div(matrix.median(axis=0), axis=1)
+        # Get numeric columns for normalization
+        numeric_cols = matrix.select(pl.col(pl.Float64, pl.Int64)).columns
+        non_numeric_cols = [col for col in matrix.columns if col not in numeric_cols]
+        
+        # Calculate medians for numeric columns and apply normalization
+        normalized_data = matrix.select(non_numeric_cols)
+        for col in numeric_cols:
+            col_median = matrix.select(pl.col(col).median()).item()
+            if col_median != 0:
+                normalized_data = normalized_data.with_columns(
+                    (pl.col(col) / col_median).alias(col)
+                )
+            else:
+                normalized_data = normalized_data.with_columns(pl.col(col))
+        
+        return normalized_data
 
-    def _median_median_normalize(self, matrix: pd.DataFrame) -> pd.DataFrame:
+    def _median_median_normalize(self, matrix: pl.DataFrame) -> pl.DataFrame:
         """Median of medians normalization"""
         logger.info("Applying median of medians normalization.")
-        sample_medians = matrix.median(axis=0)
-        global_median = sample_medians.median()
-        return matrix.div(sample_medians, axis=1) * global_median
+        # Get numeric columns for normalization
+        numeric_cols = matrix.select(pl.col(pl.Float64, pl.Int64)).columns
+        non_numeric_cols = [col for col in matrix.columns if col not in numeric_cols]
+        
+        # Calculate sample medians and global median
+        sample_medians = {}
+        for col in numeric_cols:
+            sample_medians[col] = matrix.select(pl.col(col).median()).item()
+        
+        global_median = pl.Series(list(sample_medians.values())).median()
+        
+        # Apply normalization
+        normalized_data = matrix.select(non_numeric_cols)
+        for col in numeric_cols:
+            if sample_medians[col] != 0:
+                normalized_data = normalized_data.with_columns(
+                    ((pl.col(col) / sample_medians[col]) * global_median).alias(col)
+                )
+            else:
+                normalized_data = normalized_data.with_columns(pl.col(col))
+        
+        return normalized_data
 
-    def _quantile_normalize(self, matrix: pd.DataFrame) -> pd.DataFrame:
+    def _quantile_normalize(self, matrix: pl.DataFrame) -> pl.DataFrame:
         """Quantile normalization"""
         try:
             from sklearn.preprocessing import quantile_transform
+            import pandas as pd
 
             logger.info("Applying quantile normalization.")
+            # Convert to pandas for scikit-learn compatibility, then back to polars
+            pandas_matrix = matrix.to_pandas()
             # Transpose to normalize samples (columns) together
-            normalized = quantile_transform(matrix.T, copy=True).T
-            return pd.DataFrame(normalized, index=matrix.index, columns=matrix.columns)
+            normalized = quantile_transform(pandas_matrix.T, copy=True).T
+            normalized_df = pl.from_pandas(pd.DataFrame(normalized, index=pandas_matrix.index, columns=pandas_matrix.columns))
+            return normalized_df
         except ImportError as exc:
             raise ImportError(
                 "scikit-learn is required for quantile normalization"
@@ -877,7 +920,7 @@ class BaseOSWReader(BaseReader):
     def __init__(self, config: BaseIOConfig):
         super().__init__(config)
 
-    def read(self) -> pd.DataFrame:
+    def read(self) -> pl.DataFrame:
         """
         Abstract method to be implemented by subclasses to read data from OSW format for a specific algorithm.
         """
@@ -950,7 +993,7 @@ class BaseParquetReader(BaseReader):
                     f"the alignment file {self.alignment_file} must exist."
                 )
 
-    def read(self) -> pd.DataFrame:
+    def read(self) -> pl.DataFrame:
         """
         Abstract method to be implemented by subclasses to read data from Parquet format for a specific algorithm.
         """
@@ -1146,7 +1189,7 @@ class BaseSplitParquetReader(BaseParquetReader):
         # Flag to indicate whether the input is a multi-run directory
         self._is_multi_run = config.file_type == "parquet_split_multi"
 
-    def read(self) -> pd.DataFrame:
+    def read(self) -> pl.DataFrame:
         """
         Abstract method to be implemented by subclasses to read data from splti parquet format for a specific algorithm.
         """
