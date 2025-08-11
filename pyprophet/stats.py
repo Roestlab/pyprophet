@@ -6,6 +6,7 @@ from collections import namedtuple
 import numpy as np
 import scipy as sp
 import pandas as pd
+import polars as pl
 import scipy.stats
 import scipy.special
 from statsmodels.nonparametric.kde import KDEUnivariate
@@ -42,6 +43,8 @@ def to_one_dim_array(values, as_type=None):
         values = np.array(values, dtype=np.float32)
     elif isinstance(values, pd.Series):
         values = values.values
+    elif isinstance(values, pl.Series):
+        values = values.to_numpy()
     values = values.flatten()
     assert values.ndim == 1, "values has wrong dimension"
     if as_type is not None:
@@ -436,9 +439,9 @@ def stat_metrics(p_values, pi0, pfdr):
     fnr[fnr > 1.0] = 1.0
     fnr[num_positives == 0] = 0.0
 
-    svalues = pd.Series(sens)[::-1].cummax()[::-1]
+    svalues = pl.Series(sens).reverse().cummax().reverse()
 
-    return pd.DataFrame(
+    return pl.DataFrame(
         {
             "tp": tp,
             "fp": fp,
@@ -597,7 +600,7 @@ def error_statistics(
     metrics = stat_metrics(target_pvalues, pi0["pi0"], pfdr)
 
     # generate main statistics table
-    error_stat = pd.DataFrame(
+    error_stat = pl.DataFrame(
         {
             "cutoff": target_scores,
             "pvalue": target_pvalues,

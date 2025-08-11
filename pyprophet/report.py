@@ -5,6 +5,7 @@ try:
     from matplotlib.backends.backend_pdf import PdfPages
     import seaborn as sns
     import pandas as pd
+    import polars as pl
     import matplotlib.pyplot as plt
 except ImportError:
     plt = None
@@ -121,7 +122,9 @@ class PlotGenerator:
                 score = intersection / union if union != 0 else 0.0
                 matrix[i, j] = matrix[j, i] = score
 
-        return pd.DataFrame(matrix, index=runs, columns=runs)
+        return pl.DataFrame(matrix, schema={run: pl.Float64 for run in runs}).with_columns(
+            pl.Series(name="index", values=runs)
+        ).select(["index"] + list(runs))
 
     @handle_plot_errors
     def add_id_barplot(self, ax, df, id_key, title=None, ylabel=None, xlabel=None):
@@ -520,7 +523,7 @@ class PlotGenerator:
             logger.opt(raw=True, colors=True).info("=" * 80)
             logger.opt(raw=True, colors=True).info("\n")
             logger.opt(raw=True, colors=True).info(
-                f"{pd.DataFrame(summary_rows).rename(columns={0: 'run_id', 1: 'num_ids', 2: 'min_area', 3: 'mean_area', 4: 'max_area'})}"
+                f"{pl.DataFrame(summary_rows, schema=['run_id', 'num_ids', 'min_area', 'mean_area', 'max_area'])}"
             )
             logger.opt(raw=True, colors=True).info("\n")
             table_blocks.append((thresh_label, summary_rows))
@@ -1233,7 +1236,7 @@ def create_summary_table(pdf, df):
                 ].idxmax()
             ].reset_index(drop=True)
         else:
-            peptide_df = pd.DataFrame(columns=["peptide_id", "run_id"])
+            peptide_df = pl.DataFrame(schema={"peptide_id": pl.Int64, "run_id": pl.Int64})
 
         # Try to get protein level with best available q-value
         protein_q_cols = [
@@ -1267,7 +1270,7 @@ def create_summary_table(pdf, df):
                 ].idxmax()
             ].reset_index(drop=True)
         else:
-            protein_df = pd.DataFrame(columns=["protein_id", "run_id"])
+            protein_df = pl.DataFrame(schema={"protein_id": pl.Int64, "run_id": pl.Int64})
 
         # Get unique run IDs
         run_ids = sorted(df["run_id"].unique())
@@ -1360,7 +1363,7 @@ def create_summary_table(pdf, df):
             )
 
         # Create DataFrame from summary data
-        summary_df = pd.DataFrame(summary_data)
+        summary_df = pl.DataFrame(summary_data)
 
         # Create figure for the table
         fig, ax = plt.subplots(figsize=(15, max(4, len(summary_data) * 0.5)))

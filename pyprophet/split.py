@@ -3,6 +3,7 @@ import os
 import shutil
 import click
 import pandas as pd
+import polars as pl
 import duckdb
 import click
 from pathlib import Path
@@ -74,17 +75,18 @@ def split_osw(infile: str, threads: int = cpu_count() - 1):
     conn = sqlite3.connect(infile)
 
     # Get unique run IDs from the RUN table
-    run_ids = pd.read_sql("SELECT * FROM RUN", conn)
+    run_ids_pd = pd.read_sql("SELECT * FROM RUN", conn)
+    run_ids = pl.from_pandas(run_ids_pd)
     conn.close()
 
-    if run_ids.shape[0] == 1:
+    if len(run_ids) == 1:
         click.echo(f"Info: Only one run found in {infile}. No splitting necessary.")
         return
 
-    click.echo(f"Info: Splitting {infile} into {run_ids.shape[0]} files.")
+    click.echo(f"Info: Splitting {infile} into {len(run_ids)} files.")
 
     run_info_list = []
-    for index, row in run_ids.iterrows():
+    for index, row in enumerate(run_ids.iter_rows(named=True)):
         run_file = os.path.basename(row["FILENAME"]).split(".")[0]
         run_id = row["ID"]
         run_info_list.append((index, run_file, run_id, infile, outdir))
