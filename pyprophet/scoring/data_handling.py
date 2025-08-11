@@ -21,6 +21,7 @@ import random
 import click
 import numpy as np
 import pandas as pd
+import polars as pl
 from loguru import logger
 from sklearn.preprocessing import StandardScaler
 
@@ -83,27 +84,29 @@ def cleanup_and_check(df):
     Cleans up the input DataFrame and validates its structure.
 
     Args:
-        df (pd.DataFrame): Input data.
+        df (pl.DataFrame): Input data.
 
     Returns:
-        pd.DataFrame: Cleaned and validated data.
+        pl.DataFrame: Cleaned and validated data.
     """
     score_columns = ["main_score"] + [c for c in df.columns if c.startswith("var_")]
     # this is fast but not easy to read
     # find peak groups with in valid scores:
-    sub_df = df.loc[:, score_columns]
-    flags = ~pd.isnull(sub_df)
-    valid_rows = flags.all(axis=1)
+    sub_df = df.select(score_columns)
+    # Check for non-null values
+    valid_rows = sub_df.select(
+        pl.all_horizontal([pl.col(col).is_not_null() for col in score_columns])
+    ).to_series()
     logger.trace(f"{valid_rows.sum()} valid rows out of {len(df)}")
-    df_cleaned = df.loc[valid_rows, :]
+    df_cleaned = df.filter(valid_rows)
 
     # decoy / non decoy sub tables
-    df_decoy = df_cleaned[df_cleaned["is_decoy"].eq(True)]
-    df_target = df_cleaned[df_cleaned["is_decoy"].eq(False)]
+    df_decoy = df_cleaned.filter(pl.col("is_decoy") == True)
+    df_target = df_cleaned.filter(pl.col("is_decoy") == False)
 
     # groups
-    decoy_groups = set(df_decoy["tg_id"])
-    target_groups = set(df_target["tg_id"])
+    decoy_groups = set(df_decoy.get_column("tg_id").to_list())
+    target_groups = set(df_target.get_column("tg_id").to_list())
 
     n_decoy = len(decoy_groups)
     n_target = len(target_groups)
@@ -133,7 +136,7 @@ def prepare_data_table(
     Prepares the input data table for scoring and analysis.
 
     Args:
-        table (pd.DataFrame): Input data table.
+        table (pl.DataFrame): Input data table.
         ss_score_filter (str): Semi-supervised score filter.
         tg_id_name (str): Name of the transition group ID column.
         decoy_name (str): Name of the decoy column.
@@ -226,7 +229,7 @@ def prepare_data_table(
     empty_col = [0] * N
     empty_none_col = [None] * N
 
-    tg_ids = table[tg_id_name]
+    tg_ids = table.get_column(tg_id_name)
 
     if not check_for_unique_blocks(tg_ids) and level != "alignment":
         raise click.ClickException(
@@ -238,29 +241,22 @@ def prepare_data_table(
         tg_map[tg_id] = i
     tg_num_ids = [tg_map[tg_id] for tg_id in tg_ids]
 
-    data = dict(
-        tg_id=tg_ids.values,
-        tg_num_id=tg_num_ids,
-        is_decoy=table[decoy_name].values.astype(bool),
-        is_top_peak=empty_col,
-        is_train=empty_none_col,
-        main_score=table[main_score_name].values,
-    )
+    # Start building the DataFrame with base columns
+    df_data = {
+        "tg_id": tg_ids.to_list(),
+        "tg_num_id": tg_num_ids,
+        "is_decoy": table.get_column(decoy_name).cast(pl.Boolean).to_list(),
+        "is_top_peak": empty_col,
+        "is_train": empty_none_col,
+        "main_score": table.get_column(main_score_name).to_list(),
+    }
 
-    column_names = [
-        "tg_id",
-        "tg_num_id",
-        "is_decoy",
-        "is_top_peak",
-        "is_train",
-        "main_score",
-    ]
     used_var_column_names = []
     used_var_column_ids = []
     for i, v in enumerate(var_column_names):
         col_name = "var_%d" % i
-        col_data = table[v]
-        if pd.isnull(col_data).all():
+        col_data = table.get_column(v)
+        if col_data.is_null().all():
             logger.debug(
                 f"Column {v} contains only invalid/missing values. Column will be dropped."
             )
@@ -269,14 +265,12 @@ def prepare_data_table(
             used_var_column_names.append(v)
             used_var_column_ids.append(col_name)
 
-        data[col_name] = col_data
-        column_names.append(col_name)
+        df_data[col_name] = col_data.to_list()
 
-    data["classifier_score"] = empty_col
-    column_names.append("classifier_score")
+    df_data["classifier_score"] = empty_col
 
     # build data frame:
-    df = pd.DataFrame(data, columns=column_names)
+    df = pl.DataFrame(df_data)
 
     all_score_columns = (main_score_name,) + tuple(used_var_column_names)
     df = cleanup_and_check(df)
@@ -359,7 +353,7 @@ class Experiment(object):
     Encapsulates data operations for peak groups, decoys, and targets.
 
     Attributes:
-        df (pd.DataFrame): The underlying data.
+        df (pl.DataFrame): The underlying data.
     """
 
     @profile
@@ -373,9 +367,9 @@ class Experiment(object):
         """
         logger.info("Summary of input data:")
         logger.info("%d peak groups" % len(self.df))
-        logger.info("%d group ids" % len(self.df.tg_id.unique()))
+        logger.info("%d group ids" % len(self.df.get_column("tg_id").unique()))
         logger.info(
-            "%d scores including main score" % (len(self.df.columns.values) - 6)
+            "%d scores including main score" % (len(self.df.columns) - 6)
         )
 
     def __getitem__(self, *args):
@@ -401,7 +395,7 @@ class Experiment(object):
 
         scaler = StandardScaler()
         # Get the feature matrix from the DataFrame
-        feature_matrix = self.df[score_columns].values
+        feature_matrix = self.df.select(score_columns).to_numpy()
         # Fit the scaler to the feature matrix
         scaler.fit(feature_matrix)
         # Transform the feature matrix
@@ -414,7 +408,7 @@ class Experiment(object):
             logger.trace(
                 f"Column {col} scaled range: min={scaled_features[:, i].min()}, max={scaled_features[:, i].max()}, mean={scaled_features[:, i].mean()}, std={scaled_features[:, i].std()}"
             )
-            self.df[col] = scaled_features[:, i]
+            self.df = self.df.with_columns(pl.Series(scaled_features[:, i]).alias(col))
 
     def set_and_rerank(self, col_name, scores):
         """
@@ -425,7 +419,7 @@ class Experiment(object):
             scores (array-like): New scores to assign.
         """
         pass
-        self.df.loc[:, col_name] = scores
+        self.df = self.df.with_columns(pl.Series(scores).alias(col_name))
         self.rank_by(col_name)
 
     def rank_by(self, score_col_name):
@@ -436,10 +430,10 @@ class Experiment(object):
             score_col_name (str): Name of the score column to rank by.
         """
         flags = find_top_ranked(
-            self.df.tg_num_id.values,
-            self.df[score_col_name].values.astype(np.float32, copy=False),
+            self.df.get_column("tg_num_id").to_numpy(),
+            self.df.get_column(score_col_name).to_numpy().astype(np.float32, copy=False),
         )
-        self.df.is_top_peak = flags
+        self.df = self.df.with_columns(pl.Series(flags).alias("is_top_peak"))
 
     def get_top_test_peaks(self):
         """
@@ -449,7 +443,7 @@ class Experiment(object):
             Experiment: A new Experiment containing the top test peaks.
         """
         df = self.df
-        return Experiment(df[(df.is_train == False) & (df.is_top_peak == True)])
+        return Experiment(df.filter((pl.col("is_train") == False) & (pl.col("is_top_peak") == True)))
 
     def get_decoy_peaks(self):
         """
@@ -458,7 +452,7 @@ class Experiment(object):
         Returns:
             Experiment: A new Experiment containing the decoy peaks.
         """
-        return Experiment(self.df[self.df.is_decoy == True])
+        return Experiment(self.df.filter(pl.col("is_decoy") == True))
 
     def get_target_peaks(self):
         """
@@ -467,7 +461,7 @@ class Experiment(object):
         Returns:
             Experiment: A new Experiment containing the target peaks.
         """
-        return Experiment(self.df[self.df.is_decoy == False])
+        return Experiment(self.df.filter(pl.col("is_decoy") == False))
 
     def get_top_decoy_peaks(self):
         """
@@ -476,8 +470,8 @@ class Experiment(object):
         Returns:
             Experiment: A new Experiment containing the top decoy peaks.
         """
-        ix_top = self.df.is_top_peak == True
-        return Experiment(self.df[(self.df.is_decoy == True) & ix_top])
+        ix_top = self.df.get_column("is_top_peak") == True
+        return Experiment(self.df.filter((pl.col("is_decoy") == True) & ix_top))
 
     def get_top_target_peaks(self):
         """
@@ -486,8 +480,8 @@ class Experiment(object):
         Returns:
             Experiment: A new Experiment containing the top target peaks.
         """
-        ix_top = self.df.is_top_peak == True
-        return Experiment(self.df[(self.df.is_decoy == False) & ix_top])
+        ix_top = self.df.get_column("is_top_peak") == True
+        return Experiment(self.df.filter((pl.col("is_decoy") == False) & ix_top))
 
     def get_feature_matrix(self, use_main_score):
         """
@@ -500,7 +494,7 @@ class Experiment(object):
             np.ndarray: The feature matrix.
         """
         min_col = 5 if use_main_score else 6
-        return self.df.iloc[:, min_col:-1].values
+        return self.df.select(self.df.columns[min_col:-1]).to_numpy()
 
     def normalize_score_by_decoys(self, score_col_name):
         """
@@ -510,7 +504,7 @@ class Experiment(object):
         Args:
             score_col_name (str): Name of the score column to normalize.
         """
-        td_scores = self.get_top_decoy_peaks()[score_col_name]
+        td_scores = self.get_top_decoy_peaks().df.get_column(score_col_name).to_numpy()
         mu, nu = mean_and_std_dev(td_scores)
 
         if nu == 0:
@@ -518,7 +512,9 @@ class Experiment(object):
                 "Warning: Standard deviation of decoy scores is zero. Cannot normalize scores."
             )
 
-        self.df.loc[:, score_col_name] = (self.df[score_col_name] - mu) / nu
+        self.df = self.df.with_columns(
+            ((pl.col(score_col_name) - mu) / nu).alias(score_col_name)
+        )
 
     def filter_(self, idx):
         """
@@ -530,17 +526,17 @@ class Experiment(object):
         Returns:
             Experiment: A new Experiment containing the filtered data.
         """
-        return Experiment(self.df[idx])
+        return Experiment(self.df.filter(idx))
 
     @profile
     def add_peak_group_rank(self):
         """
         Adds a peak group rank column to the data.
         """
-        ids = self.df.tg_num_id.values
-        scores = self.df.d_score.values
+        ids = self.df.get_column("tg_num_id").to_numpy()
+        scores = self.df.get_column("d_score").to_numpy()
         peak_group_ranks = rank(ids, scores.astype(np.float32, copy=False))
-        self.df["peak_group_rank"] = peak_group_ranks
+        self.df = self.df.with_columns(pl.Series(peak_group_ranks).alias("peak_group_rank"))
 
     @profile
     def split_for_xval(self, fraction, is_test):
@@ -552,8 +548,8 @@ class Experiment(object):
             is_test (bool): Whether this is a test split.
         """
         df = self.df
-        decoy_ids = df[df.is_decoy == True].tg_id.unique()
-        target_ids = df[df.is_decoy == False].tg_id.unique()
+        decoy_ids = df.filter(pl.col("is_decoy") == True).get_column("tg_id").unique().to_list()
+        target_ids = df.filter(pl.col("is_decoy") == False).get_column("tg_id").unique().to_list()
 
         if not is_test:
             random.shuffle(decoy_ids)
@@ -564,10 +560,14 @@ class Experiment(object):
 
         decoy_ids = decoy_ids[: int(len(decoy_ids) * fraction) + 1]
         target_ids = target_ids[: int(len(target_ids) * fraction) + 1]
-        learn_ids = np.concatenate((decoy_ids, target_ids))
-        ix_learn = df.tg_id.isin(learn_ids)
-        df.loc[ix_learn, "is_train"] = True
-        df.loc[~ix_learn, "is_train"] = False
+        learn_ids = list(decoy_ids) + list(target_ids)
+        
+        self.df = self.df.with_columns(
+            pl.when(pl.col("tg_id").is_in(learn_ids))
+            .then(True)
+            .otherwise(False)
+            .alias("is_train")
+        )
 
     def get_train_peaks(self):
         """
@@ -576,5 +576,5 @@ class Experiment(object):
         Returns:
             Experiment: A new Experiment containing the training peaks.
         """
-        df = self.df[self.df.is_train == True]
+        df = self.df.filter(pl.col("is_train") == True)
         return Experiment(df)
