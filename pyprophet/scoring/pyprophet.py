@@ -193,6 +193,7 @@ class Scorer(object):
             error_estimation_config.lfdr_transformation,
             error_estimation_config.lfdr_adj,
             error_estimation_config.lfdr_eps,
+            pi0=error_estimation_config.pi0 # optionally supplied pi0
         )
 
         self.number_target_pg = len(experiment.df[experiment.df.is_decoy.eq(False)])

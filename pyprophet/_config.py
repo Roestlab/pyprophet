@@ -319,6 +319,7 @@ class RunnerIOConfig(BaseIOConfig):
         group_id,
         parametric,
         pfdr,
+        pi0,
         pi0_lambda,
         pi0_method,
         pi0_smooth_df,
@@ -370,6 +371,7 @@ class RunnerIOConfig(BaseIOConfig):
         error_estimation_config = ErrorEstimationConfig(
             parametric=parametric,
             pfdr=pfdr,
+            pi0=pi0,
             pi0_lambda=pi0_lambda,
             pi0_method=pi0_method,
             pi0_smooth_df=pi0_smooth_df,

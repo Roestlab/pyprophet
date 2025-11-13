@@ -204,6 +204,7 @@ class PyProphetRunner(object):
                 grid_size=self.runner_config.grid_size,
                 parametric=self.error_estimation_config.parametric,
                 pfdr=self.error_estimation_config.pfdr,
+                pi0=self.error_estimation_config.pi0,
                 pi0_lambda=self.error_estimation_config.pi0_lambda,
                 pi0_method=self.error_estimation_config.pi0_method,
                 pi0_smooth_df=self.error_estimation_config.pi0_smooth_df,
