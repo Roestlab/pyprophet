@@ -192,6 +192,7 @@ class StandardSemiSupervisedLearner(AbstractSemiSupervisedLearner):
         ss_iteration_fdr (float): FDR threshold for iterative learning.
         parametric (bool): Whether to use parametric FDR estimation.
         pfdr (bool): Whether to use pFDR estimation.
+        pi0 (float): Precomputed pi0 value.
         pi0_lambda (list): Lambda values for pi0 estimation.
         pi0_method (str): Method for pi0 estimation.
         pi0_smooth_df (int): Degrees of freedom for pi0 smoothing.
@@ -208,6 +209,7 @@ class StandardSemiSupervisedLearner(AbstractSemiSupervisedLearner):
         ss_iteration_fdr,
         parametric,
         pfdr,
+        pi0,
         pi0_lambda,
         pi0_method,
         pi0_smooth_df,
@@ -230,6 +232,7 @@ class StandardSemiSupervisedLearner(AbstractSemiSupervisedLearner):
         self.ss_iteration_fdr = ss_iteration_fdr
         self.parametric = parametric
         self.pfdr = pfdr
+        self.pi0 = pi0
         self.pi0_lambda = pi0_lambda
         self.pi0_method = pi0_method
         self.pi0_smooth_df = pi0_smooth_df
@@ -260,6 +263,7 @@ class StandardSemiSupervisedLearner(AbstractSemiSupervisedLearner):
             rc.ss_iteration_fdr,
             rc.error_estimation_config.parametric,
             rc.error_estimation_config.pfdr,
+            rc.error_estimation_config.pi0,
             rc.error_estimation_config.pi0_lambda,
             rc.error_estimation_config.pi0_method,
             rc.error_estimation_config.pi0_smooth_df,
@@ -287,6 +291,7 @@ class StandardSemiSupervisedLearner(AbstractSemiSupervisedLearner):
         outfile=None,
         level=None,
         working_thread_number=None,
+        pi0=None
     ):
         """
         Selects the best target peaks and top decoy peaks based on FDR thresholds.
@@ -306,6 +311,7 @@ class StandardSemiSupervisedLearner(AbstractSemiSupervisedLearner):
             outfile (str, optional): Path to the output file.
             level (str, optional): Analysis level (e.g., peptide, protein).
             working_thread_number (int, optional): Number of threads to use.
+            pi0 (float, optional): Precomputed pi0 value.
 
         Returns:
             tuple: Top decoy peaks and best target peaks.
@@ -337,6 +343,7 @@ class StandardSemiSupervisedLearner(AbstractSemiSupervisedLearner):
             outfile,
             level,
             working_thread_number,
+            pi0=pi0
         )
         best_target_peaks = tt_peaks.filter_(tt_scores >= cutoff)
         return td_peaks, best_target_peaks
@@ -374,6 +381,7 @@ class StandardSemiSupervisedLearner(AbstractSemiSupervisedLearner):
                 self.outfile,
                 self.level,
                 working_thread_number,
+                pi0=self.pi0
             )
             return abs(td_peaks.df.shape[0] - bt_peaks.df.shape[0])
         except:
@@ -440,6 +448,7 @@ class StandardSemiSupervisedLearner(AbstractSemiSupervisedLearner):
             self.outfile,
             self.level,
             working_thread_number,
+            pi0=self.pi0
         )
         model = self.inner_learner.learn(td_peaks, bt_peaks, False)
         w = model.get_parameters()
@@ -491,6 +500,7 @@ class StandardSemiSupervisedLearner(AbstractSemiSupervisedLearner):
             self.outfile,
             self.level,
             working_thread_number,
+            pi0=self.pi0
         )
 
         model = self.inner_learner.learn(td_peaks, bt_peaks, True)

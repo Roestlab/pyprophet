@@ -1006,6 +1006,7 @@ def find_cutoff(
     outfile=None,
     level=None,
     working_thread_number=None,
+    pi0=None
 ):
     """Finds cut off target score for specified false discovery rate fdr"""
 
@@ -1025,6 +1026,7 @@ def find_cutoff(
         title=outfile,
         level=level,
         working_thread_number=working_thread_number,
+        pi0=pi0
     )
     if not len(error_stat):
         raise click.ClickException("Too little data for calculating error statistcs.")
