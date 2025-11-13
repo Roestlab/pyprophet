@@ -82,6 +82,7 @@ def peptide(
     context,
     parametric,
     pfdr,
+    pi0,
     pi0_lambda,
     pi0_method,
     pi0_smooth_df,
@@ -117,6 +118,7 @@ def peptide(
         context,
         parametric,
         pfdr,
+        pi0, 
         pi0_lambda,
         pi0_method,
         pi0_smooth_df,
@@ -178,6 +180,7 @@ def glycopeptide(
     grid_size,
     parametric,
     pfdr,
+    pi0,
     pi0_lambda,
     pi0_method,
     pi0_smooth_df,
@@ -201,6 +204,7 @@ def glycopeptide(
         context,
         parametric,
         pfdr,
+        pi0,
         pi0_lambda,
         pi0_method,
         pi0_smooth_df,
@@ -266,6 +270,7 @@ def gene(
     context,
     parametric,
     pfdr,
+    pi0,
     pi0_lambda,
     pi0_method,
     pi0_smooth_df,
@@ -301,6 +306,7 @@ def gene(
         context,
         parametric,
         pfdr,
+        pi0,
         pi0_lambda,
         pi0_method,
         pi0_smooth_df,
@@ -366,6 +372,7 @@ def protein(
     context,
     parametric,
     pfdr,
+    pi0,
     pi0_lambda,
     pi0_method,
     pi0_smooth_df,
@@ -380,6 +387,7 @@ def protein(
     """
     Infer proteins and conduct error-rate estimation in different contexts.
     """
+    print('here')
 
     # Check to see if we're calling from the previous deprecated command call
     if ctx.command.deprecated:
@@ -401,6 +409,7 @@ def protein(
         context,
         parametric,
         pfdr,
+        pi0,
         pi0_lambda,
         pi0_method,
         pi0_smooth_df,

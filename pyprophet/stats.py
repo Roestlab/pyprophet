@@ -890,6 +890,7 @@ def error_statistics(
     title=None,
     level=None,
     working_thread_number=None,
+    pi0=None,
 ):
     """Takes list of decoy and target scores and creates error statistics for target values"""
 
@@ -898,6 +899,10 @@ def error_statistics(
 
     decoy_scores = to_one_dim_array(decoy_scores)
     decoy_scores = np.sort(decoy_scores[~np.isnan(decoy_scores)])
+
+    # format pi0 into dict if given, so output looks the same as the pi0est method
+    if pi0 is not None:
+        pi0 = {"pi0": pi0}
 
     # compute p-values using decoy scores
     if parametric:
@@ -910,14 +915,15 @@ def error_statistics(
     if save_report and title is not None and sel_column is not None:
         # Place pi0 estimation in a try-except block for plot generation only
         try:
-            # estimate pi0
-            pi0 = pi0est(
-                target_pvalues,
-                pi0_lambda,
-                pi0_method,
-                pi0_smooth_df,
-                pi0_smooth_log_pi0,
-            )
+            if pi0 is None:
+                # estimate pi0
+                pi0 = pi0est(
+                    target_pvalues,
+                    pi0_lambda,
+                    pi0_method,
+                    pi0_smooth_df,
+                    pi0_smooth_log_pi0,
+                )
         except Exception as e:
             pi0 = None
             pi0_error_msg = e
@@ -940,10 +946,11 @@ def error_statistics(
         if pi0 is None:
             raise click.ClickException(f"{pi0_error_msg}")
     else:
-        # estimate pi0
-        pi0 = pi0est(
-            target_pvalues, pi0_lambda, pi0_method, pi0_smooth_df, pi0_smooth_log_pi0
-        )
+        if pi0 is None:
+            # estimate pi0
+            pi0 = pi0est(
+                target_pvalues, pi0_lambda, pi0_method, pi0_smooth_df, pi0_smooth_log_pi0
+            )
 
     # compute q-value
     target_qvalues = qvalue(target_pvalues, pi0["pi0"], pfdr)

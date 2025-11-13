@@ -406,6 +406,12 @@ def shared_statistics_options(func):
             hidden=True,
         ),
         click.option(
+            "--pi0",
+            type=click.FloatRange(0, 1),  # restricts between 0 and 1
+            default=None,
+            help="Set a fixed value for pi0 instead of estimating it. [default: None]",
+            hidden=True),
+        click.option(
             "--pi0_lambda",
             default=[0.1, 0.5, 0.05],
             show_default=True,

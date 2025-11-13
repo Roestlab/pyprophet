@@ -52,6 +52,7 @@ class ErrorEstimationConfig:
     """
 
     # Global FDR & pi0
+    pi0: Optional[float] = None # if set do not estimate pi0
     parametric: bool = False
     pfdr: bool = False
     pi0_lambda: Union[float, List[float]] = (0.1, 0.5, 0.05)
@@ -577,6 +578,7 @@ class LevelContextIOConfig(BaseIOConfig):
         context_fdr,  # context for levels_context, global, experiment-wide, run-specific
         parametric,
         pfdr,
+        pi0,
         pi0_lambda,
         pi0_method,
         pi0_smooth_df,
@@ -606,6 +608,7 @@ class LevelContextIOConfig(BaseIOConfig):
             lfdr_transformation=lfdr_transformation,
             lfdr_adj=lfdr_adj,
             lfdr_eps=lfdr_eps,
+            pi0=pi0
         )
 
         return cls(

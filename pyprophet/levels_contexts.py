@@ -42,6 +42,7 @@ def statistics_report(
     lfdr_adj,
     lfdr_eps,
     writer,
+    pi0 = None
 ):
     """
     Generates error statistics and updates the input data with FDR-related metrics.
@@ -60,6 +61,7 @@ def statistics_report(
         lfdr_adj (float): Adjustment factor for local FDR.
         lfdr_eps (float): Epsilon value for local FDR.
         writer (Writer): Writer object for saving reports.
+        pi0 Optional[float]: Use this pi0, ignores other pi0 setting parameters. 
 
     Returns:
         pd.DataFrame: Updated data with FDR-related metrics.
@@ -79,6 +81,7 @@ def statistics_report(
         lfdr_transformation,
         lfdr_adj,
         lfdr_eps,
+        pi0 = pi0,
     )
 
     stat_table = final_err_table(error_stat)
@@ -140,6 +143,7 @@ def infer_genes(
             config.error_estimation_config.lfdr_adj,
             config.error_estimation_config.lfdr_eps,
             writer,
+            config.error_estimation_config.pi0 # optional argument so at the bottom
         )
     elif context in ["global", "experiment-wide"]:
         data = statistics_report(
@@ -156,6 +160,7 @@ def infer_genes(
             config.error_estimation_config.lfdr_adj,
             config.error_estimation_config.lfdr_eps,
             writer,
+            config.error_estimation_config.pi0 # optional argument so at the bottom
         )
 
     # Store results
@@ -198,6 +203,7 @@ def infer_proteins(
             config.error_estimation_config.lfdr_adj,
             config.error_estimation_config.lfdr_eps,
             writer,
+            config.error_estimation_config.pi0 # optional argument so at the bottom
         )
     elif context in ["global", "experiment-wide"]:
         data = statistics_report(
@@ -214,6 +220,7 @@ def infer_proteins(
             config.error_estimation_config.lfdr_adj,
             config.error_estimation_config.lfdr_eps,
             writer,
+            config.error_estimation_config.pi0 # optional argument so at the bottom
         )
 
     # Store results
@@ -252,6 +259,7 @@ def infer_peptides(config: LevelContextIOConfig):
             config.error_estimation_config.lfdr_adj,
             config.error_estimation_config.lfdr_eps,
             writer,
+            config.error_estimation_config.pi0 # optional argument so at the bottom
         )
 
     elif context in ["global", "experiment-wide"]:
@@ -269,6 +277,7 @@ def infer_peptides(config: LevelContextIOConfig):
             config.error_estimation_config.lfdr_adj,
             config.error_estimation_config.lfdr_eps,
             writer,
+            config.error_estimation_config.pi0 # optional argument so at the bottom
         )
 
     # store data in table
